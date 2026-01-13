@@ -9,9 +9,9 @@ st.set_page_config(page_title="Container Traffic Control", layout="wide")
 
 # This handles the GitHub saving logic
 def update_github_excel(df):
-    token = st.secrets["GITHUB_TOKEN"]
-    repo = st.secrets["REPO_NAME"]
-    path = st.secrets["FILE_PATH"]
+    token = st.secrets["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"]
+    repo = st.secrets["container-tracking-app"]
+    path = st.secrets["loading_schedule.xlsx"]
     
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -36,7 +36,7 @@ def update_github_excel(df):
 # --- 2. DATA LOADING ---
 @st.cache_data(ttl=5)
 def load_data():
-    return pd.read_excel(st.secrets["FILE_PATH"])
+    return pd.read_excel(st.secrets["loading_schedule.xlsx"])
 
 df = load_data()
 
@@ -72,7 +72,7 @@ with tab2:
     # Simple Password check
     password = st.text_input("Enter Office Authorization Code:", type="password")
     
-    if password == st.secrets["OFFICE_PASSWORD"]:
+    if password == st.secrets["LogisticAdmin2024"]:
         st.write("✅ Access Granted. You may update bays or times below.")
         
         # This is the ONLY place where editing is allowed

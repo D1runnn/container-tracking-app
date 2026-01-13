@@ -60,50 +60,62 @@ s3.metric("System Time", datetime.now().strftime("%H:%M"))
 tab_map, tab_edit, tab_search = st.tabs(["🗺️ Visual Yard Map", "📝 Bulk Editor", "🔍 Guard Search"])
 
 with tab_map:
-    # 4 Zone Layout
+    # 4 Zone Layout Configuration
     z_config = {"Zone 1": 1, "Zone 2": 5, "Zone 3": 4, "Zone 4": 5}
     z_cols = st.columns(4)
     
     for i, (z_name, n_bays) in enumerate(z_config.items()):
         with z_cols[i]:
-            st.subheader(z_name)
+            st.markdown(f"### {z_name}")
+            
             for b_num in range(1, n_bays + 1):
                 b_name = f"Bay {b_num}"
-                bay_data = df[(df['Zone'] == z_name) & (df['Bay'] == b_name)]
+                # Filter bookings for this specific bay and sort by Time
+                bay_data = df[(df['Zone'] == z_name) & (df['Bay'] == b_name)].sort_values(by='Time')
                 
                 with st.container(border=True):
                     if not bay_data.empty:
-                        # Sort to find who is currently in the bay
-                        bay_data = bay_data.sort_values(by='Time')
-                        top_job = bay_data.iloc[0]
-                        status = str(top_job['Status'])
+                        # 1. THE ACTIVE CONTAINER (Top of the list)
+                        active_job = bay_data.iloc[0]
+                        status = str(active_job['Status'])
                         
-                        # Visual Header
+                        # Style the header based on status
                         if status == "Arrived":
-                            st.error(f"🔴 {b_name}: {top_job['Booking_No']}")
+                            st.error(f"🚨 {b_name}: {active_job['Booking_No']}")
                         elif status == "Delayed":
-                            st.warning(f"🟡 {b_name}: {top_job['Booking_No']}")
+                            st.warning(f"⚠️ {b_name}: {active_job['Booking_No']}")
                         else:
-                            st.info(f"🔵 {b_name}: {top_job['Booking_No']}")
+                            st.info(f"🚚 {b_name}: {active_job['Booking_No']}")
                         
-                        st.caption(f"Schedule: {top_job['Time']}")
+                        st.caption(f"Current Slot: **{active_job['Time']}**")
                         
-                        # --- ONE-CLICK ACTIONS ---
-                        c1, c2 = st.columns(2)
-                        # Password protected actions
-                        pwd = st.sidebar.text_input(f"Admin Key for {b_name}", type="password", key=f"pwd_{z_name}_{b_name}")
-                        if pwd == st.secrets["OFFICE_PASSWORD"]:
-                            if c1.button("✅ Arrived", key=f"arr_{z_name}_{b_name}"):
-                                df.loc[df['Booking_No'] == top_job['Booking_No'], 'Status'] = 'Arrived'
+                        # 2. THE UPCOMING PIPELINE
+                        if len(bay_data) > 1:
+                            st.markdown("---")
+                            st.caption("📅 **Upcoming Today:**")
+                            # Show the next 2 upcoming bookings
+                            for _, next_job in bay_data.iloc[1:3].iterrows():
+                                st.write(f"🕒 {next_job['Time']} | **{next_job['Booking_No']}**")
+                            
+                            # If there are more than 2 upcoming, add a "More" indicator
+                            if len(bay_data) > 3:
+                                st.caption(f"*(+{len(bay_data)-3} more)*")
+                        
+                        # 3. ACTION BUTTONS (Password Protected Sidebar handles the key)
+                        if st.sidebar.checkbox(f"Unlock Actions {z_name}-{b_name}"):
+                            c1, c2 = st.columns(2)
+                            if c1.button("Arrived", key=f"a_{z_name}_{b_num}"):
+                                df.loc[df['Booking_No'] == active_job['Booking_No'], 'Status'] = 'Arrived'
                                 save_to_github(df)
                                 st.rerun()
-                            if c2.button("🏁 Clear", key=f"clr_{z_name}_{b_name}"):
-                                # Remove or mark as completed
-                                df = df[df['Booking_No'] != top_job['Booking_No']]
+                            if c2.button("Clear", key=f"c_{z_name}_{b_num}"):
+                                df = df[df['Booking_No'] != active_job['Booking_No']]
                                 save_to_github(df)
                                 st.rerun()
                     else:
-                        st.success(f"🟢 {b_name}: Available")
+                        # Empty Bay Visual
+                        st.success(f"🟢 {b_name}")
+                        st.caption("Status: **Available**")
 
 with tab_edit:
     st.info("🏢 Logistics Office: Manage Schedule via Dropdowns")

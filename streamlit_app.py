@@ -5,235 +5,179 @@ import base64
 import io
 from datetime import datetime
 
-# --- 1. CONFIG & AUTH ---
-st.set_page_config(page_title="Warehouse Command Center", layout="wide")
+# --- 1. INITIAL CONFIGURATION ---
+st.set_page_config(page_title="Logistics Command Center", layout="wide", initial_sidebar_state="expanded")
 
+# Define the warehouse structure (Matching your map)
+ZONE_LIMITS = {
+    "Zone 1": 1,
+    "Zone 2": 5,
+    "Zone 3": 4,
+    "Zone 4": 5
+}
+
+# --- 2. GITHUB SYNC ENGINE ---
 def save_to_github(df):
-    token = st.secrets["GITHUB_TOKEN"]
-    repo = st.secrets["REPO_NAME"]
-    path = st.secrets["FILE_PATH"]
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    content = output.getvalue()
+    try:
+        token = st.secrets["GITHUB_TOKEN"]
+        repo = st.secrets["REPO_NAME"]
+        path = st.secrets["FILE_PATH"]
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        content = output.getvalue()
 
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    headers = {"Authorization": f"token {token}"}
-    r = requests.get(url, headers=headers)
-    
-    if r.status_code == 200:
-        sha = r.json()['sha']
-        payload = {
-            "message": "Dashboard Update",
-            "content": base64.b64encode(content).decode("utf-8"),
-            "sha": sha
-        }
-        requests.put(url, json=payload, headers=headers)
-        return True
-    return False
+        url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        headers = {"Authorization": f"token {token}"}
+        r = requests.get(url, headers=headers)
+        
+        if r.status_code == 200:
+            sha = r.json()['sha']
+            payload = {
+                "message": f"Dashboard Update: {datetime.now().strftime('%H:%M')}",
+                "content": base64.b64encode(content).decode("utf-8"),
+                "sha": sha
+            }
+            res = requests.put(url, json=payload, headers=headers)
+            return res.status_code in [200, 201]
+        return False
+    except Exception as e:
+        st.error(f"GitHub Sync Error: {e}")
+        return False
 
-# --- 2. DATA LOADING ---
-@st.cache_data(ttl=2) # Very low TTL for live feel
+# --- 3. DATA LOADER (FAST CACHE) ---
+@st.cache_data(ttl=2)
 def load_data():
     try:
-        data = pd.read_excel(st.secrets["FILE_PATH"])
+        file_path = st.secrets["FILE_PATH"]
+        data = pd.read_excel(file_path)
+        # Clean columns to prevent KeyErrors
         data.columns = [str(c).strip() for c in data.columns]
         return data
-    except:
-        return None
+    except Exception:
+        # Fallback if file is missing/corrupt
+        return pd.DataFrame(columns=["Booking_No", "Zone", "Bay", "Time", "Status"])
 
 df = load_data()
 
-# --- 3. THE COMMAND CENTER ---
-st.title("🏗️ Warehouse Loading Command Center")
+# --- 4. SIDEBAR - SYSTEM CONTROL ---
+with st.sidebar:
+    st.header("🔑 Admin Access")
+    admin_key = st.text_input("Enter Authorization Code", type="password")
+    is_admin = admin_key == st.secrets["OFFICE_PASSWORD"]
+    
+    if is_admin:
+        st.success("Admin Mode Active")
+        if st.button("🔄 Force Global Refresh"):
+            st.cache_data.clear()
+            st.rerun()
+    else:
+        st.info("Viewer Mode: Actions Restricted")
 
-# --- TOP STATS ---
-total_in = len(df[df['Status'] == 'Arrived'])
-pending = len(df[df['Status'] == 'Expected'])
-s1, s2, s3 = st.columns(3)
-s1.metric("Bays Occupied", f"{total_in}")
-s2.metric("Upcoming Today", f"{pending}")
-s3.metric("System Time", datetime.now().strftime("%H:%M"))
+# --- 5. MAIN DASHBOARD UI ---
+st.title("🚛 Container Terminal Command Center")
 
-# --- MAIN INTERFACE TABS ---
-tab_map, tab_edit, tab_search = st.tabs(["🗺️ Visual Yard Map", "📝 Bulk Editor", "🔍 Guard Search"])
+tab_map, tab_office, tab_search = st.tabs([
+    "📍 LIVE YARD MAP", 
+    "📝 OFFICE MANAGEMENT", 
+    "🔍 GUARD SEARCH"
+])
 
+# --- TAB: YARD MAP ---
 with tab_map:
-    # 4 Zone Layout Configuration
-    z_config = {"Zone 1": 1, "Zone 2": 5, "Zone 3": 4, "Zone 4": 5}
     z_cols = st.columns(4)
     
-    for i, (z_name, n_bays) in enumerate(z_config.items()):
+    for i, (z_name, n_bays) in enumerate(ZONE_LIMITS.items()):
         with z_cols[i]:
-            st.markdown(f"### {z_name}")
-            
+            st.subheader(z_name)
             for b_num in range(1, n_bays + 1):
                 b_name = f"Bay {b_num}"
-                # Filter bookings for this specific bay and sort by Time
+                # Filter for this bay
                 bay_data = df[(df['Zone'] == z_name) & (df['Bay'] == b_name)].sort_values(by='Time')
                 
                 with st.container(border=True):
                     if not bay_data.empty:
-                        # 1. THE ACTIVE CONTAINER (Top of the list)
-                        active_job = bay_data.iloc[0]
-                        status = str(active_job['Status'])
+                        top_job = bay_data.iloc[0]
+                        status = str(top_job['Status'])
                         
-                        # Style the header based on status
+                        # Color coding
                         if status == "Arrived":
-                            st.error(f"🚨 {b_name}: {active_job['Booking_No']}")
+                            st.error(f"🔴 {b_name}: {top_job['Booking_No']}")
                         elif status == "Delayed":
-                            st.warning(f"⚠️ {b_name}: {active_job['Booking_No']}")
+                            st.warning(f"🟡 {b_name}: {top_job['Booking_No']}")
                         else:
-                            st.info(f"🚚 {b_name}: {active_job['Booking_No']}")
+                            st.info(f"🔵 {b_name}: {top_job['Booking_No']}")
                         
-                        st.caption(f"Current Slot: **{active_job['Time']}**")
+                        st.caption(f"Schedule: {top_job['Time']}")
                         
-                        # 2. THE UPCOMING PIPELINE
+                        # Upcoming previews
                         if len(bay_data) > 1:
-                            st.markdown("---")
-                            st.caption("📅 **Upcoming Today:**")
-                            # Show the next 2 upcoming bookings
-                            for _, next_job in bay_data.iloc[1:3].iterrows():
-                                st.write(f"🕒 {next_job['Time']} | **{next_job['Booking_No']}**")
-                            
-                            # If there are more than 2 upcoming, add a "More" indicator
-                            if len(bay_data) > 3:
-                                st.caption(f"*(+{len(bay_data)-3} more)*")
+                            with st.expander("Upcoming"):
+                                for _, row in bay_data.iloc[1:3].iterrows():
+                                    st.write(f"• {row['Booking_No']} ({row['Time']})")
                         
-                        # 3. ACTION BUTTONS (Password Protected Sidebar handles the key)
-                        if st.sidebar.checkbox(f"Unlock Actions {z_name}-{b_name}"):
+                        # Admin Quick Actions
+                        if is_admin:
                             c1, c2 = st.columns(2)
-                            if c1.button("Arrived", key=f"a_{z_name}_{b_num}"):
-                                df.loc[df['Booking_No'] == active_job['Booking_No'], 'Status'] = 'Arrived'
-                                save_to_github(df)
-                                st.rerun()
-                            if c2.button("Clear", key=f"c_{z_name}_{b_num}"):
-                                df = df[df['Booking_No'] != active_job['Booking_No']]
-                                save_to_github(df)
-                                st.rerun()
+                            if c1.button("Arrive", key=f"arr_{z_name}_{b_name}"):
+                                df.loc[df['Booking_No'] == top_job['Booking_No'], 'Status'] = 'Arrived'
+                                if save_to_github(df): st.rerun()
+                            if c2.button("Clear", key=f"clr_{z_name}_{b_name}"):
+                                updated_df = df[df['Booking_No'] != top_job['Booking_No']]
+                                if save_to_github(updated_df): st.rerun()
                     else:
-                        # Empty Bay Visual
                         st.success(f"🟢 {b_name}")
-                        st.caption("Status: **Available**")
+                        st.caption("Available")
 
-with tab_edit:
-    st.info("🏢 Logistics Office: Manage Schedule via Dropdowns")
-    admin_pwd = st.text_input("Enter Admin Password to Edit:", type="password", key="bulk_admin")
-    
-    if admin_pwd == st.secrets["OFFICE_PASSWORD"]:
-        # 1. Define the dropdown options
-        zone_options = ["Zone 1", "Zone 2", "Zone 3", "Zone 4"]
-        bay_options = [f"Bay {i}" for i in range(1, 6)]
-        status_options = ["Expected", "Arrived", "Delayed", "Completed"]
+# --- TAB: OFFICE MANAGEMENT ---
+with tab_office:
+    if is_admin:
+        st.header("Add New Schedule")
+        with st.form("new_booking", clear_on_submit=True):
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                new_bno = st.text_input("Booking No").upper().strip()
+                sel_zone = st.selectbox("Assign Zone", list(ZONE_LIMITS.keys()))
+            with f2:
+                # DYNAMIC BAY SELECTION
+                b_count = ZONE_LIMITS[sel_zone]
+                sel_bay = st.selectbox("Assign Bay", [f"Bay {j}" for j in range(1, b_count + 1)])
+                sel_status = st.selectbox("Status", ["Expected", "Delayed", "Arrived"])
+            with f3:
+                sel_time = st.time_input("Scheduled Time")
+                if st.form_submit_button("➕ Add Booking"):
+                    new_entry = pd.DataFrame([{
+                        "Booking_No": new_bno, "Zone": sel_zone, 
+                        "Bay": sel_bay, "Time": sel_time.strftime("%H:%M"), 
+                        "Status": sel_status
+                    }])
+                    final_df = pd.concat([df, new_entry], ignore_index=True)
+                    if save_to_github(final_df):
+                        st.cache_data.clear()
+                        st.rerun()
 
-        # 2. Configure the data editor with dropdowns
-        edited_df = st.data_editor(
-            df,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "Zone": st.column_config.SelectboxColumn(
-                    "Warehouse Zone",
-                    help="Select the assigned area",
-                    options=zone_options,
-                    required=True,
-                ),
-                "Bay": st.column_config.SelectboxColumn(
-                    "Loading Bay",
-                    options=bay_options,
-                    required=True,
-                ),
-                "Status": st.column_config.SelectboxColumn(
-                    "Current Status",
-                    options=status_options,
-                    required=True,
-                ),
-                "Time": st.column_config.TimeColumn(
-                    "Scheduled Time",
-                    format="HH:mm",
-                    step=60,
-                ),
-                "Booking_No": st.column_config.TextColumn(
-                    "Booking Number",
-                    max_chars=15,
-                    validate="^[A-Z0-9-]+$", # Only allows Uppercase, Numbers, and Dashes
-                )
-            },
-            hide_index=True,
-        )
-        
-        if st.button("🚀 Sync All Changes to Yard Map"):
-            with st.spinner("Updating GitHub..."):
-                if save_to_github(edited_df):
-                    st.success("Yard Map Updated! The Guards will see the changes instantly.")
-                    st.cache_data.clear()
-                    st.rerun()
-
-with tab_search:
-    query = st.text_input("Search Booking No:").upper()
-    if query:
-        match = df[df['Booking_No'].astype(str) == query]
-        if not match.empty:
-            st.dataframe(match)
-with tab2:
-    st.header("🏢 Logistics Command Portal")
-    admin_pwd = st.sidebar.text_input("Admin Access Code", type="password")
-
-    if admin_pwd == st.secrets["OFFICE_PASSWORD"]:
-        # --- NEW BOOKING FORM ---
-        with st.expander("➕ ADD NEW SCHEDULED BOOKING", expanded=True):
-            with st.form("booking_form", clear_on_submit=True):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    new_bn = st.text_input("Booking Number").upper().strip()
-                    # Logic for Zone selection
-                    target_zone = st.selectbox("Select Zone", ["Zone 1", "Zone 2", "Zone 3", "Zone 4"])
-                
-                with col2:
-                    # Dynamic Bay Selection based on Zone
-                    if target_zone == "Zone 1":
-                        max_b = 1
-                    elif target_zone == "Zone 3":
-                        max_b = 4
-                    else:
-                        max_b = 5
-                    
-                    target_bay = st.selectbox("Select Bay", [f"Bay {i}" for i in range(1, max_b + 1)])
-                    target_status = st.selectbox("Initial Status", ["Expected", "Delayed", "Arrived"])
-
-                with col3:
-                    target_time = st.time_input("Scheduled Time")
-                    submit_booking = st.form_submit_button("Confirm & Add to Yard")
-
-                if submit_booking:
-                    if new_bn == "":
-                        st.error("Booking Number is required!")
-                    else:
-                        # Create the new row
-                        new_row = pd.DataFrame([{
-                            "Booking_No": new_bn,
-                            "Zone": target_zone,
-                            "Bay": target_bay,
-                            "Time": target_time.strftime("%H:%M"),
-                            "Status": target_status
-                        }])
-                        
-                        # Add to existing data
-                        updated_df = pd.concat([df, new_row], ignore_index=True)
-                        
-                        with st.spinner("Syncing to Yard Map..."):
-                            if save_to_github(updated_df):
-                                st.success(f"Booking {new_bn} assigned to {target_zone} - {target_bay}!")
-                                st.cache_data.clear()
-                                st.rerun()
-
-        # --- EXISTING TABLE EDITOR (For quick fixes) ---
-        st.subheader("📝 Master Schedule Management")
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        if st.button("Save Manual Table Changes"):
+        st.divider()
+        st.header("Master Schedule Editor")
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, hide_index=True)
+        if st.button("💾 Sync Table Changes"):
             if save_to_github(edited_df):
-                st.success("Table synced!")
                 st.cache_data.clear()
+                st.success("Changes saved!")
                 st.rerun()
+    else:
+        st.warning("Please enter the Admin Access Code in the sidebar to unlock editing.")
+
+# --- TAB: GUARD SEARCH ---
+with tab_search:
+    st.header("Check-In Terminal")
+    search_q = st.text_input("Scan or Type Booking Number:").upper().strip()
+    if search_q:
+        match = df[df['Booking_No'].astype(str).str.upper() == search_q]
+        if not match.empty:
+            res = match.iloc[0]
+            st.balloons()
+            st.success(f"### PROCEED TO {res['Zone']} - {res['Bay']}")
+            st.write(f"**Schedule Time:** {res['Time']} | **Status:** {res['Status']}")
+        else:
+            st.error("Booking Number Not Found. Direct driver to Logistics Office.")

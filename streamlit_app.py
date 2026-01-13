@@ -4,31 +4,28 @@ import requests
 import base64
 import io
 
-# --- 1. CONFIGURATION ---
+# --- 1. SETTINGS & AUTH ---
 st.set_page_config(page_title="Container Traffic Control", layout="wide")
 
-# This function updates the Excel file back to GitHub when changes are made
+# This handles the GitHub saving logic
 def update_github_excel(df):
     token = st.secrets["GITHUB_TOKEN"]
     repo = st.secrets["REPO_NAME"]
     path = st.secrets["FILE_PATH"]
     
-    # Convert DataFrame back to Excel bytes
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
     content = output.getvalue()
 
-    # Get current file info (sha)
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = {"Authorization": f"token {token}"}
     r = requests.get(url, headers=headers)
     
     if r.status_code == 200:
         sha = r.json()['sha']
-        # Upload new version
         payload = {
-            "message": "Update schedule (delay/edit)",
+            "message": "Office Update: Status/Delay change",
             "content": base64.b64encode(content).decode("utf-8"),
             "sha": sha
         }
@@ -37,71 +34,58 @@ def update_github_excel(df):
     return False
 
 # --- 2. DATA LOADING ---
-@st.cache_data(ttl=5) # Refreshes every 5 seconds for live updates
+@st.cache_data(ttl=5)
 def load_data():
     return pd.read_excel(st.secrets["FILE_PATH"])
 
-try:
-    df = load_data()
-except Exception:
-    st.error("Excel file not found. Check FILE_PATH in Secrets.")
-    st.stop()
+df = load_data()
 
-# --- 3. THE UI LAYOUT ---
-st.title("🚛 Gate Management System")
+# --- 3. UI TABS ---
+# Guards stay on Tab 1, Office uses Tab 2
+tab1, tab2 = st.tabs(["🛡️ Guard Check-In", "🏢 Logistics Office (Edit Access)"])
 
-tab1, tab2 = st.tabs(["🛡️ Guard House View", "⚙️ Office (Edit Delays)"])
-
-# --- TAB 1: GUARD VIEW ---
+# --- TAB 1: GUARD HOUSE VIEW (Read-Only) ---
 with tab1:
-    st.header("Container Check-In")
+    st.header("Search Incoming Container")
     search_input = st.text_input("ENTER BOOKING NUMBER:", "").strip().upper()
 
     if search_input:
-        # Match booking number
         result = df[df['Booking_No'].astype(str) == search_input]
-        
         if not result.empty:
             row = result.iloc[0]
-            # Visual Instruction Card
-            st.markdown(f"""
-                <div style="background-color:#1E3A8A; color:white; padding:30px; border-radius:15px; text-align:center;">
-                    <h1 style="font-size:50px; margin:0;">ZONE: {row['Zone']}</h1>
-                    <h2 style="font-size:40px; margin:0;">BAY: {row['Bay']}</h2>
-                    <hr>
-                    <h3>STATUS: {row['Status']} | SCHEDULED: {row['Time']}</h3>
-                </div>
-            """, unsafe_allow_value=True)
+            # High-visibility direction for the Guard
+            st.success(f"### PROCEED TO {row['Zone']}")
+            st.metric(label="ASSIGNED BAY", value=row['Bay'])
+            st.info(f"Scheduled Time: {row['Time']} | Status: {row['Status']}")
         else:
-            st.warning("⚠️ Booking Number not found. Please refer to Logistics Office.")
+            st.error("Booking Number not found. Direct driver to Office.")
 
-# --- TAB 2: OFFICE VIEW ---
+    st.divider()
+    st.subheader("Current Warehouse Status")
+    # Guards can see the list, but CANNOT edit it
+    st.dataframe(df[['Booking_No', 'Zone', 'Bay', 'Time', 'Status']], use_container_width=True)
+
+# --- TAB 2: LOGISTICS OFFICE VIEW (Password Protected) ---
 with tab2:
-    st.header("Live Schedule Editor")
-    st.write("Modify the Bay, Time, or Status below if there is a delay.")
+    st.header("Office Management Portal")
     
-    # Interactive Table
-    edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+    # Simple Password check
+    password = st.text_input("Enter Office Authorization Code:", type="password")
     
-    if st.button("💾 Save & Sync Changes"):
-        with st.spinner("Syncing with master file..."):
-            success = update_github_excel(edited_df)
-            if success:
-                st.success("Master Schedule Updated!")
-                st.cache_data.clear()
-            else:
-                st.error("Sync failed. Check GitHub Token.")
-
-# --- FOOTER: WAREHOUSE OVERVIEW ---
-st.divider()
-st.subheader("Current Bay Occupancy Map")
-z1, z2, z3, z4 = st.columns(4)
-
-zones = ["Zone 1", "Zone 2", "Zone 3", "Zone 4"]
-cols = [z1, z2, z3, z4]
-
-for i, zone_name in enumerate(zones):
-    with cols[i]:
-        st.info(f"**{zone_name}**")
-        zone_subset = df[df['Zone'] == zone_name][['Bay', 'Time', 'Status']]
-        st.dataframe(zone_subset, hide_index=True)
+    if password == st.secrets["OFFICE_PASSWORD"]:
+        st.write("✅ Access Granted. You may update bays or times below.")
+        
+        # This is the ONLY place where editing is allowed
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        
+        if st.button("💾 Apply Changes & Notify Gate"):
+            with st.spinner("Syncing changes..."):
+                if update_github_excel(edited_df):
+                    st.success("Changes saved! Guards will see updates instantly.")
+                    st.cache_data.clear()
+                else:
+                    st.error("Sync failed. Check connection.")
+    elif password == "":
+        st.info("Enter password to unlock editing features.")
+    else:
+        st.error("Incorrect Password.")

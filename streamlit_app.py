@@ -1,51 +1,50 @@
 import streamlit as st
 import pandas as pd
-import requests
-import base64
-import io
-import os
 
-st.set_page_config(page_title="Container Traffic Control", layout="wide")
+# ... (Keep your existing data loading code here) ...
 
-# --- DATA LOADING (Direct from Folder) ---
-@st.cache_data(ttl=2)
-def load_data():
-    # This checks if the file actually exists in the GitHub folder
-    file_path = "loading_schedule.xlsx"
-    if os.path.exists(file_path):
-        return pd.read_excel(file_path)
-    else:
-        return None
+st.title("🏗️ Live Warehouse Bay Monitor")
 
-df = load_data()
+# Define the layout based on your map
+# Zone 1: 1 Bay | Zone 2: 5 Bays | Zone 3: 4 Bays | Zone 4: 5 Bays
+zone_configs = {
+    "Zone 1": 1,
+    "Zone 2": 5,
+    "Zone 3": 4,
+    "Zone 4": 5
+}
 
-if df is None:
-    st.error("❌ loading_schedule.xlsx not found in GitHub. Please upload it to the main folder.")
-    st.stop()
+# Create 4 main columns for the 4 Zones
+zone_cols = st.columns(4)
 
-# --- APP UI ---
-st.title("🚛 Container Entry System")
-
-tab1, tab2 = st.tabs(["🛡️ Guard View", "🏢 Office Edit"])
-
-with tab1:
-    search = st.text_input("Enter Booking Number:").strip().upper()
-    if search:
-        # We ensure Booking_No is treated as a string for searching
-        match = df[df['Booking_No'].astype(str) == search]
-        if not match.empty:
-            res = match.iloc[0]
-            st.success(f"### PROCEED TO {res['Zone']} - {res['Bay']}")
-        else:
-            st.error("Booking Not Found.")
-    
-    st.dataframe(df)
-
-with tab2:
-    # We use a simple hardcoded password check first to see if it loads
-    pwd = st.text_input("Office Password", type="password")
-    if pwd == st.secrets.get("OFFICE_PASSWORD", "admin123"):
-        st.write("Edit Mode Active")
-        edited_df = st.data_editor(df)
-        if st.button("Save Changes"):
-            st.info("Saving logic is currently paused to test loading. If you see this, the app is working!")
+for i, (zone_name, num_bays) in enumerate(zone_configs.items()):
+    with zone_cols[i]:
+        st.markdown(f"### {zone_name}")
+        
+        # Loop through each bay in this zone
+        for bay_num in range(1, num_bays + 1):
+            bay_label = f"Bay {bay_num}"
+            
+            # Filter data for this specific Bay
+            bay_data = df[(df['Zone'] == zone_name) & (df['Bay'] == bay_label)]
+            
+            # Create a visual box for the Bay
+            with st.container(border=True):
+                if not bay_data.empty:
+                    # Sort by time to see what's next
+                    bay_data = bay_data.sort_values(by='Time')
+                    
+                    # Current/Next Container
+                    current = bay_data.iloc[0]
+                    st.markdown(f"**{bay_label}**")
+                    st.info(f"🚚 {current['Booking_No']}\n\nTime: {current['Time']}")
+                    
+                    # Upcoming Containers (if any)
+                    if len(bay_data) > 1:
+                        with st.expander("View Upcoming"):
+                            for _, row in bay_data.iloc[1:].iterrows():
+                                st.write(f"• {row['Booking_No']} ({row['Time']})")
+                else:
+                    # Empty Bay
+                    st.markdown(f"**{bay_label}**")
+                    st.caption("✅ Available")

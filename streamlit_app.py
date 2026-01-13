@@ -3,12 +3,12 @@ import pandas as pd
 import requests
 import base64
 import io
+from datetime import datetime
 
-# --- 1. SETTINGS & AUTH ---
-st.set_page_config(page_title="Container Traffic Control", layout="wide")
+# --- 1. CONFIG & AUTH ---
+st.set_page_config(page_title="Warehouse Command Center", layout="wide")
 
-# GitHub saving logic (unchanged)
-def update_github_excel(df):
+def save_to_github(df):
     token = st.secrets["GITHUB_TOKEN"]
     repo = st.secrets["REPO_NAME"]
     path = st.secrets["FILE_PATH"]
@@ -25,7 +25,7 @@ def update_github_excel(df):
     if r.status_code == 200:
         sha = r.json()['sha']
         payload = {
-            "message": "Office Update: Status/Delay change",
+            "message": "Dashboard Update",
             "content": base64.b64encode(content).decode("utf-8"),
             "sha": sha
         }
@@ -33,104 +33,90 @@ def update_github_excel(df):
         return True
     return False
 
-# --- 2. DATA LOADING (CLEANED) ---
-@st.cache_data(ttl=5)
+# --- 2. DATA LOADING ---
+@st.cache_data(ttl=2) # Very low TTL for live feel
 def load_data():
     try:
-        # Load the file
         data = pd.read_excel(st.secrets["FILE_PATH"])
-        # CRITICAL FIX: Strip invisible spaces from column names
         data.columns = [str(c).strip() for c in data.columns]
         return data
-    except Exception as e:
-        st.error(f"Error loading Excel: {e}")
+    except:
         return None
 
 df = load_data()
 
-# Stop if data didn't load
-if df is None:
-    st.stop()
+# --- 3. THE COMMAND CENTER ---
+st.title("🏗️ Warehouse Loading Command Center")
 
-# --- 3. UI TABS ---
-tab1, tab2 = st.tabs(["🛡️ Guard Check-In", "🏢 Logistics Office (Edit Access)"])
+# --- TOP STATS ---
+total_in = len(df[df['Status'] == 'Arrived'])
+pending = len(df[df['Status'] == 'Expected'])
+s1, s2, s3 = st.columns(3)
+s1.metric("Bays Occupied", f"{total_in}")
+s2.metric("Upcoming Today", f"{pending}")
+s3.metric("System Time", datetime.now().strftime("%H:%M"))
 
-with tab1:
-    st.header("Search Incoming Container")
-    search_input = st.text_input("ENTER BOOKING NUMBER:", "").strip().upper()
+# --- MAIN INTERFACE TABS ---
+tab_map, tab_edit, tab_search = st.tabs(["🗺️ Visual Yard Map", "📝 Bulk Editor", "🔍 Guard Search"])
 
-    if search_input:
-        # Ensure Booking_No is treated as string for searching
-        result = df[df['Booking_No'].astype(str).str.upper() == search_input]
-        if not result.empty:
-            row = result.iloc[0]
-            st.success(f"### PROCEED TO {row['Zone']}")
-            st.metric(label="ASSIGNED BAY", value=row['Bay'])
-            # Safety check for status
-            status_val = row['Status'] if 'Status' in row else "N/A"
-            st.info(f"Scheduled Time: {row['Time']} | Status: {status_val}")
-        else:
-            st.error("Booking Number not found. Direct driver to Office.")
-
-    st.divider()
-    st.subheader("Current Warehouse Status")
-    # Show only columns that exist
-    display_cols = [c for c in ['Booking_No', 'Zone', 'Bay', 'Time', 'Status'] if c in df.columns]
-    st.dataframe(df[display_cols], use_container_width=True)
-
-with tab2:
-    st.header("Office Management Portal")
-    password = st.text_input("Enter Office Authorization Code:", type="password")
+with tab_map:
+    # 4 Zone Layout
+    z_config = {"Zone 1": 1, "Zone 2": 5, "Zone 3": 4, "Zone 4": 5}
+    z_cols = st.columns(4)
     
-    if password == st.secrets["OFFICE_PASSWORD"]:
-        st.write("✅ Access Granted.")
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        
-        if st.button("💾 Apply Changes & Notify Gate"):
-            with st.spinner("Syncing changes..."):
-                if update_github_excel(edited_df):
-                    st.success("Changes saved!")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("Sync failed. Check GitHub Token.")
-    elif password != "":
-        st.error("Incorrect Password.")
-
-# --- 4. LIVE BAY MONITOR ---
-st.divider()
-st.title("🏗️ Live Warehouse Bay Monitor")
-
-zone_configs = {"Zone 1": 1, "Zone 2": 5, "Zone 3": 4, "Zone 4": 5}
-zone_cols = st.columns(4)
-
-for i, (zone_name, num_bays) in enumerate(zone_configs.items()):
-    with zone_cols[i]:
-        st.markdown(f"### {zone_name}")
-        for bay_num in range(1, num_bays + 1):
-            bay_label = f"Bay {bay_num}"
-            bay_data = df[(df['Zone'] == zone_name) & (df['Bay'] == bay_label)]
-            
-            with st.container(border=True):
-                st.markdown(f"**{bay_label}**")
-                if not bay_data.empty:
-                    bay_data = bay_data.sort_values(by='Time')
-                    current = bay_data.iloc[0]
-                    
-                    # Color coding based on status
-                    status = str(current.get('Status', '')).lower()
-                    if 'arrive' in status:
-                        st.error(f"OCCUPIED: {current['Booking_No']}")
-                    elif 'delay' in status:
-                        st.warning(f"DELAYED: {current['Booking_No']}")
+    for i, (z_name, n_bays) in enumerate(z_config.items()):
+        with z_cols[i]:
+            st.subheader(z_name)
+            for b_num in range(1, n_bays + 1):
+                b_name = f"Bay {b_num}"
+                bay_data = df[(df['Zone'] == z_name) & (df['Bay'] == b_name)]
+                
+                with st.container(border=True):
+                    if not bay_data.empty:
+                        # Sort to find who is currently in the bay
+                        bay_data = bay_data.sort_values(by='Time')
+                        top_job = bay_data.iloc[0]
+                        status = str(top_job['Status'])
+                        
+                        # Visual Header
+                        if status == "Arrived":
+                            st.error(f"🔴 {b_name}: {top_job['Booking_No']}")
+                        elif status == "Delayed":
+                            st.warning(f"🟡 {b_name}: {top_job['Booking_No']}")
+                        else:
+                            st.info(f"🔵 {b_name}: {top_job['Booking_No']}")
+                        
+                        st.caption(f"Schedule: {top_job['Time']}")
+                        
+                        # --- ONE-CLICK ACTIONS ---
+                        c1, c2 = st.columns(2)
+                        # Password protected actions
+                        pwd = st.sidebar.text_input(f"Admin Key for {b_name}", type="password", key=f"pwd_{z_name}_{b_name}")
+                        if pwd == st.secrets["OFFICE_PASSWORD"]:
+                            if c1.button("✅ Arrived", key=f"arr_{z_name}_{b_name}"):
+                                df.loc[df['Booking_No'] == top_job['Booking_No'], 'Status'] = 'Arrived'
+                                save_to_github(df)
+                                st.rerun()
+                            if c2.button("🏁 Clear", key=f"clr_{z_name}_{b_name}"):
+                                # Remove or mark as completed
+                                df = df[df['Booking_No'] != top_job['Booking_No']]
+                                save_to_github(df)
+                                st.rerun()
                     else:
-                        st.info(f"NEXT: {current['Booking_No']}")
-                    
-                    st.caption(f"Time: {current['Time']}")
-                    
-                    if len(bay_data) > 1:
-                        with st.expander("Upcoming"):
-                            for _, row in bay_data.iloc[1:].iterrows():
-                                st.write(f"• {row['Booking_No']} ({row['Time']})")
-                else:
-                    st.success("✅ Available")
+                        st.success(f"🟢 {b_name}: Available")
+
+with tab_edit:
+    st.info("Logistics Office: Edit the master schedule here. Changes sync to GitHub instantly.")
+    admin_pwd = st.text_input("Enter Admin Password to Edit:", type="password")
+    if admin_pwd == st.secrets["OFFICE_PASSWORD"]:
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        if st.button("Sync All Changes"):
+            save_to_github(edited_df)
+            st.success("Master File Updated!")
+
+with tab_search:
+    query = st.text_input("Search Booking No:").upper()
+    if query:
+        match = df[df['Booking_No'].astype(str) == query]
+        if not match.empty:
+            st.dataframe(match)

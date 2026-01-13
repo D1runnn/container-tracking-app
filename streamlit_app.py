@@ -9,9 +9,10 @@ st.set_page_config(page_title="Container Traffic Control", layout="wide")
 
 # This handles the GitHub saving logic
 def update_github_excel(df):
-    token = st.secrets["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"]
-    repo = st.secrets["container-tracking-app"]
-    path = st.secrets["loading_schedule.xlsx"]
+    # Use the labels (Keys) here, not the actual values
+    token = st.secrets["GITHUB_TOKEN"]
+    repo = st.secrets["REPO_NAME"]
+    path = st.secrets["FILE_PATH"]
     
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -36,15 +37,19 @@ def update_github_excel(df):
 # --- 2. DATA LOADING ---
 @st.cache_data(ttl=5)
 def load_data():
-    return pd.read_excel(st.secrets["loading_schedule.xlsx"])
+    # Use the label "FILE_PATH" to find the filename
+    return pd.read_excel(st.secrets["FILE_PATH"])
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Error loading Excel: {e}")
+    st.stop()
 
 # --- 3. UI TABS ---
-# Guards stay on Tab 1, Office uses Tab 2
 tab1, tab2 = st.tabs(["🛡️ Guard Check-In", "🏢 Logistics Office (Edit Access)"])
 
-# --- TAB 1: GUARD HOUSE VIEW (Read-Only) ---
+# --- TAB 1: GUARD HOUSE VIEW ---
 with tab1:
     st.header("Search Incoming Container")
     search_input = st.text_input("ENTER BOOKING NUMBER:", "").strip().upper()
@@ -53,7 +58,6 @@ with tab1:
         result = df[df['Booking_No'].astype(str) == search_input]
         if not result.empty:
             row = result.iloc[0]
-            # High-visibility direction for the Guard
             st.success(f"### PROCEED TO {row['Zone']}")
             st.metric(label="ASSIGNED BAY", value=row['Bay'])
             st.info(f"Scheduled Time: {row['Time']} | Status: {row['Status']}")
@@ -62,29 +66,25 @@ with tab1:
 
     st.divider()
     st.subheader("Current Warehouse Status")
-    # Guards can see the list, but CANNOT edit it
     st.dataframe(df[['Booking_No', 'Zone', 'Bay', 'Time', 'Status']], use_container_width=True)
 
-# --- TAB 2: LOGISTICS OFFICE VIEW (Password Protected) ---
+# --- TAB 2: LOGISTICS OFFICE VIEW ---
 with tab2:
     st.header("Office Management Portal")
-    
-    # Simple Password check
     password = st.text_input("Enter Office Authorization Code:", type="password")
     
-    if password == st.secrets["LogisticAdmin2024"]:
-        st.write("✅ Access Granted. You may update bays or times below.")
-        
-        # This is the ONLY place where editing is allowed
+    # Use the label "OFFICE_PASSWORD" to check the password
+    if password == st.secrets["OFFICE_PASSWORD"]:
+        st.write("✅ Access Granted.")
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         
         if st.button("💾 Apply Changes & Notify Gate"):
             with st.spinner("Syncing changes..."):
                 if update_github_excel(edited_df):
-                    st.success("Changes saved! Guards will see updates instantly.")
+                    st.success("Changes saved!")
                     st.cache_data.clear()
                 else:
-                    st.error("Sync failed. Check connection.")
+                    st.error("Sync failed. Check GitHub Token and Permissions.")
     elif password == "":
         st.info("Enter password to unlock editing features.")
     else:

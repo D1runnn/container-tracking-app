@@ -176,3 +176,64 @@ with tab_search:
         match = df[df['Booking_No'].astype(str) == query]
         if not match.empty:
             st.dataframe(match)
+with tab2:
+    st.header("🏢 Logistics Command Portal")
+    admin_pwd = st.sidebar.text_input("Admin Access Code", type="password")
+
+    if admin_pwd == st.secrets["OFFICE_PASSWORD"]:
+        # --- NEW BOOKING FORM ---
+        with st.expander("➕ ADD NEW SCHEDULED BOOKING", expanded=True):
+            with st.form("booking_form", clear_on_submit=True):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    new_bn = st.text_input("Booking Number").upper().strip()
+                    # Logic for Zone selection
+                    target_zone = st.selectbox("Select Zone", ["Zone 1", "Zone 2", "Zone 3", "Zone 4"])
+                
+                with col2:
+                    # Dynamic Bay Selection based on Zone
+                    if target_zone == "Zone 1":
+                        max_b = 1
+                    elif target_zone == "Zone 3":
+                        max_b = 4
+                    else:
+                        max_b = 5
+                    
+                    target_bay = st.selectbox("Select Bay", [f"Bay {i}" for i in range(1, max_b + 1)])
+                    target_status = st.selectbox("Initial Status", ["Expected", "Delayed", "Arrived"])
+
+                with col3:
+                    target_time = st.time_input("Scheduled Time")
+                    submit_booking = st.form_submit_button("Confirm & Add to Yard")
+
+                if submit_booking:
+                    if new_bn == "":
+                        st.error("Booking Number is required!")
+                    else:
+                        # Create the new row
+                        new_row = pd.DataFrame([{
+                            "Booking_No": new_bn,
+                            "Zone": target_zone,
+                            "Bay": target_bay,
+                            "Time": target_time.strftime("%H:%M"),
+                            "Status": target_status
+                        }])
+                        
+                        # Add to existing data
+                        updated_df = pd.concat([df, new_row], ignore_index=True)
+                        
+                        with st.spinner("Syncing to Yard Map..."):
+                            if save_to_github(updated_df):
+                                st.success(f"Booking {new_bn} assigned to {target_zone} - {target_bay}!")
+                                st.cache_data.clear()
+                                st.rerun()
+
+        # --- EXISTING TABLE EDITOR (For quick fixes) ---
+        st.subheader("📝 Master Schedule Management")
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        if st.button("Save Manual Table Changes"):
+            if save_to_github(edited_df):
+                st.success("Table synced!")
+                st.cache_data.clear()
+                st.rerun()

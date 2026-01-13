@@ -106,13 +106,57 @@ with tab_map:
                         st.success(f"🟢 {b_name}: Available")
 
 with tab_edit:
-    st.info("Logistics Office: Edit the master schedule here. Changes sync to GitHub instantly.")
-    admin_pwd = st.text_input("Enter Admin Password to Edit:", type="password")
+    st.info("🏢 Logistics Office: Manage Schedule via Dropdowns")
+    admin_pwd = st.text_input("Enter Admin Password to Edit:", type="password", key="bulk_admin")
+    
     if admin_pwd == st.secrets["OFFICE_PASSWORD"]:
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        if st.button("Sync All Changes"):
-            save_to_github(edited_df)
-            st.success("Master File Updated!")
+        # 1. Define the dropdown options
+        zone_options = ["Zone 1", "Zone 2", "Zone 3", "Zone 4"]
+        bay_options = [f"Bay {i}" for i in range(1, 6)]
+        status_options = ["Expected", "Arrived", "Delayed", "Completed"]
+
+        # 2. Configure the data editor with dropdowns
+        edited_df = st.data_editor(
+            df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Zone": st.column_config.SelectboxColumn(
+                    "Warehouse Zone",
+                    help="Select the assigned area",
+                    options=zone_options,
+                    required=True,
+                ),
+                "Bay": st.column_config.SelectboxColumn(
+                    "Loading Bay",
+                    options=bay_options,
+                    required=True,
+                ),
+                "Status": st.column_config.SelectboxColumn(
+                    "Current Status",
+                    options=status_options,
+                    required=True,
+                ),
+                "Time": st.column_config.TimeColumn(
+                    "Scheduled Time",
+                    format="HH:mm",
+                    step=60,
+                ),
+                "Booking_No": st.column_config.TextColumn(
+                    "Booking Number",
+                    max_chars=15,
+                    validate="^[A-Z0-9-]+$", # Only allows Uppercase, Numbers, and Dashes
+                )
+            },
+            hide_index=True,
+        )
+        
+        if st.button("🚀 Sync All Changes to Yard Map"):
+            with st.spinner("Updating GitHub..."):
+                if save_to_github(edited_df):
+                    st.success("Yard Map Updated! The Guards will see the changes instantly.")
+                    st.cache_data.clear()
+                    st.rerun()
 
 with tab_search:
     query = st.text_input("Search Booking No:").upper()
